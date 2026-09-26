@@ -244,12 +244,7 @@ async def _process_a2a_response(
     if payload_name:
         response_data['kind'] = payload_name.replace('_', '-')
 
-    # response_id = (
-    #     response_data.get('id')
-    #     or response_data.get('messageId')
-    #     or response_data.get('taskId')
-    #     or request_id
-    # )
+
 def _extract_context_id_from_event(event: Any) -> str | None:
     """Extract context_id from any of the possible event types."""
     for attr in ('context_id', 'contextId'):
@@ -595,7 +590,6 @@ async def handle_disconnect(sid: str) -> None:
         await httpx_client.aclose()
         logger.info(f'Cleaned up client for {sid}')
 
-
     sio.on('disconnect', handle_disconnect)
 
 
@@ -749,7 +743,9 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     try:
         response_stream = await _send_message_compat(a2a_client, message)
         async for stream_result in response_stream:
-            await _process_a2a_response(stream_result, sid, request_id=message_id)
+            await _process_a2a_response(
+                stream_result, sid, request_id=message_id
+            )
 
     except Exception as e:
         logger.error(f'Failed to send message for sid {sid}', exc_info=True)
