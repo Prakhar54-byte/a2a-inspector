@@ -1,4 +1,3 @@
-import base64
 import logging
 
 from importlib import import_module
@@ -12,24 +11,17 @@ import httpx
 import socketio
 
 from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
-from a2a.types import (
-    AgentCard,
-    FilePart,
-    FileWithBytes,
-    FileWithUri,
-    Message,
-    Part,
-    Role,
-    TextPart,
-    TransportProtocol,
-from a2a.client import A2ACardResolver
-from a2a.client.client import Client, ClientConfig
-from a2a.client.client_factory import ClientFactory
+
+# from a2a.client.client import , ClientConfig
+# from a2a.client.client_factory import ClientFactory
 from a2a.types import (
     AgentCard,
     Message,
-    Part,
     Role,
+    # AgentCard,
+    # Message,
+    # Part,
+    # Role,
     SendMessageRequest,
 )
 from fastapi import FastAPI, Request
@@ -43,6 +35,11 @@ try:
     validators = import_module('backend.validators')
 except ModuleNotFoundError:
     validators = import_module('validators')
+
+try:
+    a2a_compat = import_module('backend.a2a_compat')
+except ModuleNotFoundError:
+    a2a_compat = import_module('a2a_compat')
 # ---------------------------------------------------------------------------
 # Backward-compatibility: TransportProtocol moved and enum values changed.
 # v0.3: TransportProtocol.jsonrpc  (lowercase)
@@ -56,17 +53,16 @@ try:
     _TP_GRPC = TransportProtocol.GRPC
 except (ImportError, AttributeError):
     # Fall back to legacy import path (a2a-sdk < 1.0)
-    from a2a.types import (  # type: ignore[attr-defined,no-redef]
-        TransportProtocol,
-    )
+    legacy_types = import_module('a2a.types')
+    legacy_transport_protocol = legacy_types.TransportProtocol
 
-    _TP_JSONRPC = TransportProtocol.jsonrpc  # type: ignore[attr-defined]
+    _TP_JSONRPC = legacy_transport_protocol.jsonrpc
     try:
-        _TP_HTTP_JSON = TransportProtocol.http_json  # type: ignore[attr-defined]
+        _TP_HTTP_JSON = legacy_transport_protocol.http_json
     except AttributeError:
         _TP_HTTP_JSON = _TP_JSONRPC
     try:
-        _TP_GRPC = TransportProtocol.grpc  # type: ignore[attr-defined]
+        _TP_GRPC = legacy_transport_protocol.grpc
     except AttributeError:
         _TP_GRPC = _TP_JSONRPC
 
@@ -162,8 +158,9 @@ def _get_transport_from_card(card: AgentCard) -> str:
     except (IndexError, AttributeError):
         pass
     # v0.3 legacy fallback
-    if hasattr(card, 'preferred_transport') and card.preferred_transport:
-        return str(card.preferred_transport)
+    preferred_transport = getattr(card, 'preferred_transport', None)
+    if preferred_transport:
+        return str(preferred_transport)
     return 'JSONRPC'
 
 
@@ -237,59 +234,6 @@ def _unwrap_stream_event(client_event: Any) -> tuple[Any, str | None]:
     return event, payload_name
 
 
-def _message_parts(
-    message_text: str, attachments: list[dict[str, Any]]
-) -> list[Part]:
-    parts: list[Part] = []
-    if message_text:
-        parts.append(Part(TextPart(text=message_text)))
-
-    for attachment in attachments:
-        mime_type = attachment.get('mimeType', 'application/octet-stream')
-        name = attachment.get('name')
-        uri = attachment.get('uri')
-        if uri:
-            parts.append(
-                Part(
-                    FilePart(
-                        file=FileWithUri(
-                            uri=uri, mime_type=mime_type, name=name
-                        )
-                    )
-                )
-            )
-        else:
-            parts.append(
-                Part(
-                    FilePart(
-                        file=FileWithBytes(
-                            bytes=attachment['data'],
-                            mime_type=mime_type,
-                            name=name,
-                        )
-                    )
-                )
-            )
-
-    return parts
-
-
-def _build_send_message_request(
-    message_text: str,
-    message_id: str,
-    context_id: str | None,
-    metadata: dict[str, Any],
-    attachments: list[dict[str, Any]],
-) -> Message:
-    return Message(
-        role=Role.user,
-        parts=_message_parts(message_text, attachments),
-        message_id=message_id,
-        context_id=context_id,
-        metadata=metadata,
-    )
-
-
 async def _process_a2a_response(
     client_event: Any, sid: str, request_id: str
 ) -> None:
@@ -300,12 +244,12 @@ async def _process_a2a_response(
     if payload_name:
         response_data['kind'] = payload_name.replace('_', '-')
 
-    response_id = (
-        response_data.get('id')
-        or response_data.get('messageId')
-        or response_data.get('taskId')
-        or request_id
-    )
+    # response_id = (
+    #     response_data.get('id')
+    #     or response_data.get('messageId')
+    #     or response_data.get('taskId')
+    #     or request_id
+    # )
 def _extract_context_id_from_event(event: Any) -> str | None:
     """Extract context_id from any of the possible event types."""
     for attr in ('context_id', 'contextId'):
@@ -351,56 +295,56 @@ def _unwrap_stream_response(client_event: Any) -> object:
     return client_event
 
 
-async def _process_a2a_response(
-    client_event: Any,
-    sid: str,
-    request_id: str,
-) -> None:
-    """Processes a response from the A2A client, validates it, and emits events.
+# async def _process_a2a_response(
+#     client_event: Any,
+#     sid: str,
+#     request_id: str,
+# ) -> None:
+#     """Processes a response from the A2A client, validates it, and emits events.
 
-    Supports:
-    - a2a-sdk stable 1.0.x+: send_message yields StreamResponse directly
-    - a2a-sdk v1.0 alpha: ClientEvent = tuple[StreamResponse, Task | None]
-    - a2a-sdk v0.3: ClientEvent = tuple[TaskStatusUpdateEvent | TaskArtifactUpdateEvent, Task] | Message
+#     Supports:
+#     - a2a-sdk stable 1.0.x+: send_message yields StreamResponse directly
+#     - a2a-sdk v1.0 alpha: ClientEvent = tuple[StreamResponse, Task | None]
+#     - a2a-sdk v0.3: ClientEvent = tuple[TaskStatusUpdateEvent | TaskArtifactUpdateEvent, Task] | Message
 
-    Args:
-        client_event: The event or message received.
-        sid: The session ID associated with the original request.
-        request_id: The unique ID of the original request.
-    """
-    # --- Unwrap the client_event ---
-    event: object = _unwrap_stream_response(client_event)
+#     Args:
+#         client_event: The event or message received.
+#         sid: The session ID associated with the original request.
+#         request_id: The unique ID of the original request.
+#     """
+#     # --- Unwrap the client_event ---
+#     event: object = _unwrap_stream_response(client_event)
 
-    response_id = (
-        getattr(event, 'id', None)
-        or getattr(event, 'task_id', request_id)
-        or request_id
-    )
+#     response_id = (
+#         getattr(event, 'id', None)
+#         or getattr(event, 'task_id', request_id)
+#         or request_id
+#     )
 
-    # Serialize
-    response_data = _to_dict(event)
-    response_data['id'] = response_id
+#     # Serialize
+#     response_data = _to_dict(event)
+#     response_data['id'] = response_id
 
-    # Normalize kind for frontend (protobuf doesn't have 'kind')
-    if 'kind' not in response_data:
-        type_name = type(event).__name__
-        kind_map = {
-            'Task': 'task',
-            'Message': 'message',
-            'TaskStatusUpdateEvent': 'status-update',
-            'TaskArtifactUpdateEvent': 'artifact-update',
-        }
-        response_data['kind'] = kind_map.get(type_name, 'unknown')
+#     # Normalize kind for frontend (protobuf doesn't have 'kind')
+#     if 'kind' not in response_data:
+#         type_name = type(event).__name__
+#         kind_map = {
+#             'Task': 'task',
+#             'Message': 'message',
+#             'TaskStatusUpdateEvent': 'status-update',
+#             'TaskArtifactUpdateEvent': 'artifact-update',
+#         }
+#         response_data['kind'] = kind_map.get(type_name, 'unknown')
 
-    # Normalize task states: v1.0 uses TASK_STATE_COMPLETED (integer or string)
-    # Convert to lowercase for frontend compatibility
-    _normalize_task_state(response_data)
+#     # Normalize task states: v1.0 uses TASK_STATE_COMPLETED (integer or string)
+#     # Convert to lowercase for frontend compatibility
+#     _normalize_task_state(response_data)
 
-    validation_errors = validators.validate_message(response_data)
-    response_data['validation_errors'] = validation_errors
+#     validation_errors = validators.validate_message(response_data)
+#     response_data['validation_errors'] = validation_errors
 
-    await _emit_debug_log(sid, response_id, 'response', response_data)
-    await sio.emit('agent_response', response_data, to=sid)
+#     await _emit_debug_log(sid, response_id, 'response', response_data)
+#     await sio.emit('agent_response', response_data, to=sid)
 
 
 def _normalize_task_state(data: dict[str, Any]) -> None:
@@ -509,47 +453,6 @@ def _make_message(
     if metadata:
         kwargs['metadata'] = metadata  # type: ignore[assignment]
     return Message(**kwargs)
-
-
-def _make_text_part(text: str) -> Any:
-    """Create a text Part, compatible with v1.0 and v0.3."""
-    # v1.0: Part(text=...) — protobuf oneof
-    # v0.3: TextPart(text=...) wrapped in Part(root=...)
-    try:
-        return Part(text=text)  # v1.0
-    except (TypeError, AttributeError):
-        pass
-    # v0.3 fallback
-    try:
-        from a2a.types import (  # type: ignore[attr-defined] # noqa: PLC0415
-            TextPart,
-        )
-
-        part_compat = Part
-        return part_compat(root=TextPart(text=text))  # type: ignore[call-arg]
-    except (TypeError, ImportError, AttributeError):
-        return Part(text=text)
-
-
-def _make_file_part(data: str, mime_type: str) -> Any:
-    """Create a file (bytes) Part, compatible with v1.0 and v0.3."""
-    # v1.0: Part(raw=bytes, media_type=mime_type)
-    # v0.3: FilePart(file=FileWithBytes(bytes=data, mime_type=mime_type))
-    try:
-        raw_bytes = base64.b64decode(data)
-        return Part(raw=raw_bytes, media_type=mime_type)  # v1.0
-    except (TypeError, AttributeError):
-        pass
-    # v0.3 fallback
-    try:
-        from a2a.types import (  # type: ignore[attr-defined] # noqa: PLC0415
-            FilePart,
-            FileWithBytes,
-        )
-
-        return FilePart(file=FileWithBytes(bytes=data, mime_type=mime_type))  # type: ignore[call-arg]
-    except (TypeError, ImportError, AttributeError):
-        return Part(raw=base64.b64decode(data), media_type=mime_type)  # type: ignore[call-arg]
 
 
 def _get_role_user() -> Any:
@@ -676,13 +579,14 @@ async def get_agent_card(request: Request) -> JSONResponse:
 # ==============================================================================
 
 
-@sio.on('connect')
 async def handle_connect(sid: str, environ: dict[str, Any]) -> None:
     """Handle the 'connect' socket.io event."""
     logger.info(f'Client connected: {sid}, environment: {environ}')
 
 
-@sio.on('disconnect')
+sio.on('connect', handle_connect)
+
+
 async def handle_disconnect(sid: str) -> None:
     """Handle the 'disconnect' socket.io event."""
     logger.info(f'Client disconnected: {sid}')
@@ -692,7 +596,9 @@ async def handle_disconnect(sid: str) -> None:
         logger.info(f'Cleaned up client for {sid}')
 
 
-@sio.on('initialize_client')
+    sio.on('disconnect', handle_disconnect)
+
+
 async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
     """Handle the 'initialize_client' socket.io event."""
     agent_card_url = data.get('url')
@@ -713,42 +619,42 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         card_resolver = get_card_resolver(httpx_client, agent_card_url)
         card = await card_resolver.get_agent_card()
 
-        a2a_config = ClientConfig(
-            supported_transports=[
-                TransportProtocol.jsonrpc,
-                TransportProtocol.http_json,
-                TransportProtocol.grpc,
-            ],
-            use_client_preference=True,
-            httpx_client=httpx_client,
-        )
-        factory = ClientFactory(a2a_config)
-        a2a_client = factory.create(card)
-        server_transports = {
-            card.preferred_transport
-            or TransportProtocol.jsonrpc.value: card.url
-        }
-        if card.additional_interfaces:
-            server_transports.update(
-                {
-                    interface.transport: interface.url
-                    for interface in card.additional_interfaces
-                }
-            )
-        transport_protocol = next(
-            (
-                protocol.value
-                for protocol in [
-                    TransportProtocol.jsonrpc,
-                    TransportProtocol.http_json,
-                    TransportProtocol.grpc,
-                ]
-                if protocol.value in server_transports
-            ),
-            TransportProtocol.jsonrpc.value,
-        )
+        # a2a_config = ClientConfig(
+        #     supported_transports=[
+        #         TransportProtocol.jsonrpc,
+        #         TransportProtocol.http_json,
+        #         TransportProtocol.grpc,
+        #     ],
+        #     use_client_preference=True,
+        #     httpx_client=httpx_client,
+        # )
+        # factory = ClientFactory(a2a_config)
+        # a2a_client = factory.create(card)
+        # server_transports = {
+        #     card.preferred_transport
+        #     or TransportProtocol.jsonrpc.value: card.url
+        # }
+        # if card.additional_interfaces:
+        #     server_transports.update(
+        #         {
+        #             interface.transport: interface.url
+        #             for interface in card.additional_interfaces
+        #         }
+        #     )
+        # transport_protocol = next(
+        #     (
+        #         protocol.value
+        #         for protocol in [
+        #             TransportProtocol.jsonrpc,
+        #             TransportProtocol.http_json,
+        #             TransportProtocol.grpc,
+        #         ]
+        #         if protocol.value in server_transports
+        #     ),
+        #     TransportProtocol.jsonrpc.value,
+        # )
 
-        clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
+        # clients[sid] = (httpx_client, a2a_client, card, transport_protocol)
 
         input_modes = list(getattr(card, 'default_input_modes', [])) or [
             'text/plain'
@@ -790,7 +696,9 @@ async def handle_initialize_client(sid: str, data: dict[str, Any]) -> None:
         )
 
 
-@sio.on('send_message')
+sio.on('initialize_client', handle_initialize_client)
+
+
 async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     """Handle the 'send_message' socket.io event."""
     message_text = bleach.clean(json_data.get('message', ''))
@@ -810,16 +718,15 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
     _, a2a_client, _, transport = clients[sid]
 
     attachments = json_data.get('attachments', [])
-    message = _build_send_message_request(
-        message_text, message_id, context_id, metadata, attachments
-
     parts: list[Any] = []
     if message_text:
-        parts.append(_make_text_part(str(message_text)))
+        parts.append(a2a_compat.make_text_part(str(message_text)))
 
     for attachment in attachments:
         parts.append(
-            _make_file_part(attachment['data'], attachment['mimeType'])
+            a2a_compat.make_file_part(
+                attachment['data'], attachment['mimeType']
+            )
         )
 
     message = _make_message(
@@ -834,15 +741,15 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
         'transport': transport,
         'method': 'message/send',
         'message': _to_json(message),
-        'method': 'SendMessage',  # v1.0 PascalCase (was 'message/send' in v0.3)
-        'message': _to_dict(message),
+        # 'method': 'SendMessage',  # v1.0 PascalCase (was 'message/send' in v0.3)
+        # 'message': _to_dict(message),
     }
     await _emit_debug_log(sid, message_id, 'request', debug_request)
 
     try:
         response_stream = await _send_message_compat(a2a_client, message)
         async for stream_result in response_stream:
-            await _process_a2a_response(stream_result, sid, message_id)
+            await _process_a2a_response(stream_result, sid, request_id=message_id)
 
     except Exception as e:
         logger.error(f'Failed to send message for sid {sid}', exc_info=True)
@@ -851,6 +758,9 @@ async def handle_send_message(sid: str, json_data: dict[str, Any]) -> None:
             {'error': f'Failed to send message: {e}', 'id': message_id},
             to=sid,
         )
+
+
+sio.on('send_message', handle_send_message)
 
 
 # ==============================================================================
